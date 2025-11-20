@@ -4,6 +4,7 @@ from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
 from django.contrib.auth import get_user_model
 from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
@@ -12,6 +13,8 @@ from .permissions import (
     IsMessageSender,
     IsConversationParticipant
 )
+from .filters import MessageFilter, ConversationFilter
+from .pagination import MessagePagination, ConversationPagination
 
 User = get_user_model()
 
@@ -20,12 +23,20 @@ class ConversationViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing conversations.
     Only participants can view and interact with conversations.
+    
+    Supports filtering by:
+    - participant_username: Filter by participant's username
+    - participant_id: Filter by participant's ID
+    - created_at_after: Conversations created after this date
+    - created_at_before: Conversations created before this date
     """
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated, IsConversationParticipant]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['participants__username']
-    ordering_fields = ['created_at']
+    pagination_class = ConversationPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = ConversationFilter
+    search_fields = ['participants__username', 'participants__email']
+    ordering_fields = ['created_at', 'updated_at']
     ordering = ['-created_at']
     
     def get_queryset(self):
@@ -34,7 +45,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         """
         return Conversation.objects.filter(
             participants=self.request.user
-        ).distinct()
+        ).distinct().prefetch_related('participants', 'messages')
     
     def perform_create(self, serializer):
         """
@@ -120,28 +131,46 @@ class MessageViewSet(viewsets.ModelViewSet):
     ViewSet for managing messages.
     Only conversation participants can view messages.
     Only message senders can update/delete their messages.
+    
+    Features:
+    - Pagination: 20 messages per page
+    - Filtering by:
+        - sender_username: Filter by sender's username
+        - sender_id: Filter by sender's ID
+        - conversation_id: Filter by conversation
+        - sent_at_after: Messages sent after this date
+        - sent_at_before: Messages sent before this date
+        - sent_at_range: Messages within a date range
+        - message_body: Search message content
+        - is_read: Filter by read status
+    - Search: message_body, sender__username
+    - Ordering: sent_at, updated_at
     """
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, IsParticipantOfConversation, IsMessageSender]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    pagination_class = MessagePagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = MessageFilter
     search_fields = ['message_body', 'sender__username']
-    ordering_fields = ['sent_at']
+    ordering_fields = ['sent_at', 'updated_at']
     ordering = ['sent_at']
     
     def get_queryset(self):
         """
         Return only messages from conversations where the user is a participant.
+        Optimized with select_related to reduce database queries.
         """
         user_conversations = Conversation.objects.filter(
             participants=self.request.user
         )
         return Message.objects.filter(
             conversation__in=user_conversations
-        ).select_related('sender', 'conversation')
+        ).select_related('sender', 'conversation').order_by('-sent_at')
     
     def perform_create(self, serializer):
         """
         Automatically set the sender as the current user when creating a message.
+        Verify user is a participant in the conversation.
         """
         conversation = serializer.validated_data.get('conversation')
         
@@ -156,8 +185,17 @@ class MessageViewSet(viewsets.ModelViewSet):
     def my_messages(self, request):
         """
         Get all messages sent by the current user.
+        Supports pagination and filtering.
         """
-        messages = Message.objects.filter(sender=request.user)
+        messages = self.filter_queryset(
+            Message.objects.filter(sender=request.user)
+        )
+        
+        page = self.paginate_queryset(messages)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
         serializer = self.get_serializer(messages, many=True)
         return Response(serializer.data)
     
@@ -166,6 +204,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         """
         Get all messages for a specific conversation.
         Requires conversation_id as a query parameter.
+        Supports pagination and filtering.
         """
         conversation_id = request.query_params.get('conversation_id')
         
@@ -176,7 +215,7 @@ class MessageViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            conversation = Conversation.objects.get(id=conversation_id)
+            conversation = Conversation.objects.get(conversation_id=conversation_id)
             
             # Check if user is a participant
             if request.user not in conversation.participants.all():
@@ -185,7 +224,15 @@ class MessageViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
             
-            messages = Message.objects.filter(conversation=conversation)
+            messages = self.filter_queryset(
+                Message.objects.filter(conversation=conversation)
+            )
+            
+            page = self.paginate_queryset(messages)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            
             serializer = self.get_serializer(messages, many=True)
             return Response(serializer.data)
             
@@ -194,3 +241,40 @@ class MessageViewSet(viewsets.ModelViewSet):
                 {'error': 'Conversation not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+    
+    @action(detail=False, methods=['get'])
+    def unread_messages(self, request):
+        """
+        Get all unread messages for the current user.
+        Supports pagination and filtering.
+        """
+        user_conversations = Conversation.objects.filter(
+            participants=request.user
+        )
+        messages = self.filter_queryset(
+            Message.objects.filter(
+                conversation__in=user_conversations,
+                is_read=False
+            ).exclude(sender=request.user)
+        )
+        
+        page = self.paginate_queryset(messages)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(messages, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def mark_as_read(self, request, pk=None):
+        """
+        Mark a message as read.
+        Only participants in the conversation can mark messages as read.
+        """
+        message = self.get_object()
+        message.is_read = True
+        message.save()
+        
+        serializer = self.get_serializer(message)
+        return Response(serializer.data)
