@@ -1,0 +1,67 @@
+{
+	"id": "messaging-app-environment",
+	"name": "Messaging App - Local Development",
+	"values": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "secret",
+			"enabled": true
+		},
+		{
+			"key": "refresh_token",
+			"value": "",
+			"type": "secret",
+			"enabled": true
+		},
+		{
+			"key": "conversation_id",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "message_id",
+			"value": "",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "other_user_token",
+			"value": "",
+			"type": "secret",
+			"enabled": true
+		},
+		{
+			"key": "testuser1_username",
+			"value": "testuser1",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "testuser1_password",
+			"value": "TestPass123!",
+			"type": "secret",
+			"enabled": true
+		},
+		{
+			"key": "testuser2_username",
+			"value": "testuser2",
+			"type": "default",
+			"enabled": true
+		},
+		{
+			"key": "testuser2_password",
+			"value": "TestPass123!",
+			"type": "secret",
+			"enabled": true
+		}
+	],
+	"_postman_variable_scope": "environment"
+}
