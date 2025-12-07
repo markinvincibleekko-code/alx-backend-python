@@ -19,6 +19,7 @@ RUN pip install --upgrade pip && \
 COPY . /app/
 
 # Expose port 8000 for Django
+# Run container with: docker run -p 8000:8000 messaging-app
 EXPOSE 8000
 
 # Run Django development server
